@@ -44,7 +44,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include <stdint.h>
-
+#include  "stm32l4xx_hal_dcmi.h"
 /** @addtogroup BSP
   * @{
   */

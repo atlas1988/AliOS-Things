@@ -20,7 +20,7 @@ struct pollfd {
     short revents;
 };
 #else
-#include <poll.h>
+//#include <poll.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>

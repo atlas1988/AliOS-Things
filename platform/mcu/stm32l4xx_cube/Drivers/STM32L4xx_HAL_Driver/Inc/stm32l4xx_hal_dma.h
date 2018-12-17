@@ -127,6 +127,12 @@ typedef enum
 /**
   * @brief  DMA handle Structure definition
   */
+ typedef enum
+{
+  HAL_UNLOCKED = 0x00,
+  HAL_LOCKED   = 0x01
+} HAL_LockTypeDef;
+
 typedef struct __DMA_HandleTypeDef
 {
   DMA_Channel_TypeDef    *Instance;                                                  /*!< Register base address                */
