@@ -86,8 +86,8 @@ static uint32_t rcv_count = 0;
 static int lead_data_hit = -1;
 static uint32_t feature_code[IR_feature_max] = {0};
 static int feature_found = 0;
-static uint32_t pwm_data[IR_feature_max] = {0};
-static uint32_t pwm_div = 0;
+static uint32_t pwm_data[IR_feature_max] = {0}; // pwm 基准倍数
+static uint32_t pwm_div = 0; // pwm 基准 所以采样误差不超过MODULES_TOLERANCE 106
 static uint32_t last_rcv_time = 0;
 
 static uint8_t *pwm_send_buffer = NULL;
@@ -161,7 +161,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 	if (htim->Instance != TIM1 || rcv_count >= MAX_TIME_DATA) 
 		return;
 
-	if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) {
+	if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) {// 定时器1 记录数据
 		time = HAL_TIM_ReadCapturedValue(&htim1, TIM_CHANNEL_1);
 		rcv_data[rcv_count].time_data_e = time - rcv_data[rcv_count].time_data_s;
 		++rcv_count;
@@ -185,8 +185,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	if (htim->Instance != TIM16)
 		return;
 	
-	byte_index = pwm_send_counter >> 3;
-	bit_index = pwm_send_counter & 7;
+	byte_index = pwm_send_counter >> 3; // /8
+	bit_index = pwm_send_counter & 7; // %8
 	if ((pwm_send_buffer[byte_index] >> bit_index) & 1) {
 		TIM_ForcedOC1Config(TIM_FORCED_ACTIVE);
 	} else {
@@ -197,6 +197,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	++pwm_send_counter;
 }
 
+// ir data debug
 static void ir_dbg(void)
 {
 	int i;
@@ -253,7 +254,7 @@ static int irda_classify_feature_code(void)
 	uint32_t feature_sum[IR_feature_max] = {0};
 	uint32_t feature_freq[IR_feature_max] = {0};
 	int ret = 0;
-	
+	// 判断编码方式
 	for (i = 0; i < lead_range; ++i) {
 		if (rcv_data[i].time_data_s == 0 || rcv_data[i].time_data_e == 0)
 			continue;
@@ -262,12 +263,12 @@ static int irda_classify_feature_code(void)
 			    rcv_data[i].time_data_s < lead_arr[j].lead_s_max &&
 			    rcv_data[i].time_data_e > lead_arr[j].lead_e_min &&
 			    rcv_data[i].time_data_e < lead_arr[j].lead_e_max) {
-				lead_encoding_hit = j;
+				lead_encoding_hit = j; // 编码方式
 				break;
 			}
 		}
 		if (lead_encoding_hit != -1) {
-			lead_data_hit = i;
+			lead_data_hit = i; // 有效数据的起始位置
 			break;
 		}
 	}
@@ -275,40 +276,42 @@ static int irda_classify_feature_code(void)
 		KIDS_A10_PRT("IR encoding lead can not be found!\n");
 		return -1;
 	}
+	// 保存特征码
 	feature_code[IR_feature_lead_s] = rcv_data[lead_data_hit].time_data_s;
 	feature_code[IR_feature_lead_e] = rcv_data[lead_data_hit].time_data_e;
-	feature_found = 2;
-	rcv_data[lead_data_hit].pwm_data_s = IR_feature_lead_s;
-	rcv_data[lead_data_hit].pwm_data_e = IR_feature_lead_e;
+	feature_found = 2; // 特征数据个数
+	rcv_data[lead_data_hit].pwm_data_s = IR_feature_lead_s; // 设置数据 类型 S -> signal
+	rcv_data[lead_data_hit].pwm_data_e = IR_feature_lead_e; // 设置数据 类型 e -> empty
 	feature_sum[IR_feature_lead_s] += rcv_data[lead_data_hit].time_data_s;
 	feature_sum[IR_feature_lead_e] += rcv_data[lead_data_hit].time_data_e;
-	++feature_freq[IR_feature_lead_s];
-	++feature_freq[IR_feature_lead_e];
+	++feature_freq[IR_feature_lead_s]; //
+	++feature_freq[IR_feature_lead_e]; // 接收数据次数
+	// 解析接收的数据
 	for (i = lead_data_hit + 1; i < rcv_count; ++i) {
 		if (rcv_data[i].time_data_s == 0 || (i != rcv_count - 1 && rcv_data[i].time_data_e == 0)) {
 			KIDS_A10_PRT("Capture invalid IR time data!\n");
 			return -1;
 		}
 		
-		ret = recog_feature(rcv_data[i].time_data_s);
+		ret = recog_feature(rcv_data[i].time_data_s); // 判断数据是否为特征数据头
 		if (ret >= 0) {
-			rcv_data[i].pwm_data_s = ret;
-			feature_sum[ret] += rcv_data[i].time_data_s;
-			++feature_freq[ret];
+			rcv_data[i].pwm_data_s = ret; // 设置时间输的对应的 信号pwm
+			feature_sum[ret] += rcv_data[i].time_data_s; // 重复出现的时间 增加
+			++feature_freq[ret]; // 数量增加
 		} else {
 			if (feature_found + 1 > IR_feature_max) {
 				KIDS_A10_PRT("Overflow feature time is %u\n", rcv_data[i].time_data_s);
 				ir_dbg();
 				return -1;
 			}
-			++feature_found;
-			feature_code[feature_found - 1] = rcv_data[i].time_data_s;
-			rcv_data[i].pwm_data_s = feature_found - 1;
+			++feature_found; // 有效数据 +1
+			feature_code[feature_found - 1] = rcv_data[i].time_data_s; // 保存获取的有效数据
+			rcv_data[i].pwm_data_s = feature_found - 1; // 设置数据 类型
 			feature_sum[feature_found - 1] += rcv_data[i].time_data_s;
-			++feature_freq[feature_found - 1];
+			++feature_freq[feature_found - 1]; // 接收数据次数
 		}
 		
-		if (i == rcv_count - 1 && rcv_data[i].time_data_e == 0)
+		if (i == rcv_count - 1 && rcv_data[i].time_data_e == 0)// 数据解析完成
 			break;
 		ret = recog_feature(rcv_data[i].time_data_e);
 		if (ret >= 0) {
@@ -350,7 +353,7 @@ static void fill_pwm_data(void)
         }
     }
 }
-
+// 取余后 是否小于 MODULES_TOLERANCE（106） 
 static int is_div_by(uint32_t div)
 {
     int i;
@@ -512,7 +515,7 @@ static void fill_once(uint32_t pwm_index, uint32_t pwm_width)
 	
 	byte_index = pwm_index / 8;
 	bit_index = pwm_index % 8;
-	
+	// 每一位代表一个周期 1表示高 
 	if (pwm_width > (8 - bit_index)) {
 		width_left = 8 - bit_index;
 		pwm_width -= width_left;
@@ -542,11 +545,11 @@ static int irda_fill_send_buffer(void)
 		total_period += pwm_data[rcv_data[i].pwm_data_s];
 		total_period += pwm_data[rcv_data[i].pwm_data_e];
 	}
-	pwm_send_max = total_period;
+	pwm_send_max = total_period; // pwm 总周期数
 	alloc_bytes = total_period / 8;
 	alloc_bytes += (total_period % 8 == 0 ? 0 : 1);
 	
-	pwm_send_buffer = (uint8_t *)aos_malloc(alloc_bytes);
+	pwm_send_buffer = (uint8_t *)aos_malloc(alloc_bytes); // ?
 	if (pwm_send_buffer == NULL) {
 		KIDS_A10_PRT("aos_malloc return NULL.\n");
 		return -1;
@@ -554,8 +557,8 @@ static int irda_fill_send_buffer(void)
 	memset(pwm_send_buffer, 0, alloc_bytes);
 	
 	for (i = lead_data_hit; i < rcv_count; ++i) {
-		fill_once(pwm_index, pwm_data[rcv_data[i].pwm_data_s]);
-		pwm_index += pwm_data[rcv_data[i].pwm_data_s];
+		fill_once(pwm_index, pwm_data[rcv_data[i].pwm_data_s]); // 发送信号 周期数
+		pwm_index += pwm_data[rcv_data[i].pwm_data_s];// 发生的pwm 周期数
 		pwm_index += pwm_data[rcv_data[i].pwm_data_e];
 	}
 	
